@@ -404,7 +404,10 @@ class WEB_PDF_RAG_Application:
 
 
     def Data_Gathering_Processing(self, rag_search_type="dot product", st_container=None, use_full_pdf=False):
+        print("✅ Correct WEB_PDF_RAG_Application class is being used.")
         print(f"🔍 Starting search using: {rag_search_type}")
+
+
         # _________________________________  Gather PDF + Web Data  _______________________________________________
 
         self.url_list = self.get_google_results(self.topic, self.number_results)
@@ -527,13 +530,73 @@ class WEB_PDF_RAG_Application:
         return self.SearchModuleSetup()
 
 
+    # def SearchModuleSetup(self):
+    #     results, method = self.Semantic_Rag_DotProduct_Search(
+    #         pdf_path=self.save_path_pdf_Embeddings,
+    #         web_path=self.save_path_Weblinks_Embeddings,
+    #         query=self.topic,
+    #         similarity_method=self.rag_search_type
+    #     )
+    #     self.search_results_combined = results
+    #     self.search_method_used = method
+    #     return results, method
+
     def SearchModuleSetup(self):
-        results, method = self.Semantic_Rag_DotProduct_Search(
-            pdf_path=self.save_path_pdf_Embeddings,
-            web_path=self.save_path_Weblinks_Embeddings,
-            query=self.topic,
-            similarity_method=self.rag_search_type
-        )
+        query = self.topic
+        pdf_path = self.save_path_pdf_Embeddings
+        web_path = self.save_path_Weblinks_Embeddings
+
+        # Load chunks for methods requiring only chunks
+        chunks_pdf, _ = self.load_pdf_embeddings(pdf_path)
+        chunks_web, _ = self.load_pdf_embeddings(web_path)
+
+        rag_type = (self.rag_search_type or "dot product").lower().strip()
+
+        if rag_type in ["dot product", "cosine"]:
+            results, method = self.Semantic_Rag_DotProduct_Search(
+                pdf_path=pdf_path,
+                web_path=web_path,
+                query=query,
+                similarity_method=rag_type
+            )
+
+        elif rag_type == "euclidean":
+            results, method = self.Semantic_Rag_Euclidean_Search(
+                pdf_path=pdf_path,
+                web_path=web_path,
+                query=query
+            )
+
+        elif rag_type == "faiss":
+            results, method = self.Semantic_Rag_FAISS_Search(
+                pdf_path=pdf_path,
+                web_path=web_path,
+                query=query
+            )
+
+        elif rag_type in ["hybrid", "bm25"]:
+            results, method = self.Hybrid_BM25_Embedding_Search(
+                pdf_chunks=chunks_pdf,
+                web_chunks=chunks_web,
+                query=query
+            )
+
+        elif rag_type in ["cross", "cross encoder", "cross-encoder"]:
+            results, method = self.CrossEncoder_Reranking_Search(
+                chunks_pdf=chunks_pdf,
+                chunks_web=chunks_web,
+                query=query
+            )
+
+        else:
+            print(f"❌ Unknown search type: {rag_type}. Defaulting to dot product.")
+            results, method = self.Semantic_Rag_DotProduct_Search(
+                pdf_path=pdf_path,
+                web_path=web_path,
+                query=query,
+                similarity_method="dot product"
+            )
+
         self.search_results_combined = results
         self.search_method_used = method
         return results, method
@@ -596,6 +659,7 @@ class WEB_PDF_RAG_Application:
                 scores = util.dot_score(query_embedding, embeddings)[0]
             elif similarity_method == "cosine":
                 scores = util.cos_sim(query_embedding, embeddings)[0]
+
             else:
                 print("❌ Unsupported similarity method.")
                 return []
@@ -791,154 +855,154 @@ class WEB_PDF_RAG_Application:
 
 # ========== STREAMLIT RUNNER ==========
 
-def shutdown_streamlit():
-    st.warning("Shutting down the Streamlit app...")
-    os._exit(0)
-
-def run_streamlit_app():
-    file_name = ""
-    st.set_page_config(page_title="Hybrid RAG Search", layout="wide")
-    st.title("[Google + PDF] Semantic RAG with Google Gemma")
-
-    topic = st.text_input("Enter your query:")
-    verbose = st.toggle("Verbose Answer", value=False)
-    number_results = st.slider("Number of URLs to search", 3, 20, 5)
-    uploaded_file = st.file_uploader("Upload PDF for knowledge base", type="pdf")
-    use_full_pdf = st.checkbox("Use entire PDF (skip Chapter 1 detection)", value=False)
-
-    if uploaded_file is not None:
-        file_name = uploaded_file.name
-
-    search_mode = st.selectbox(
-        "Choose Search Mode",
-        ["google", "pdf only", "pdf + google search", "llm", "llm + pdf", "llm + google search", "llm + google search + pdf"]
-    )
-
-    rag_search_type = st.selectbox(
-        "Choose RAG Search Method",
-        ["dot product", "cosine", "euclidean", "faiss", "hybrid", "cross_encoder"]
-    )
-
-    requires_pdf = "pdf" in search_mode
-    disable_run = requires_pdf and not uploaded_file
-    run_button = st.button("Run Query", disabled=disable_run)
-
-    try:
-        if run_button and (topic or uploaded_file):
-            pdf_bytes = uploaded_file.read() if (uploaded_file and requires_pdf) else None
-
-            webapp = WEB_PDF_RAG_Application(
-                topic=topic or "N/A",
-                number_results=number_results,
-                mode=search_mode,
-                pdf_bytes=pdf_bytes,
-                verbose=verbose,
-                rag_search_type=rag_search_type,
-                file_name=file_name
-            )
-
-            with st.spinner("Running pipeline..."):
-                results, search_method = None, None
-
-                if "pdf + google search" in search_mode and pdf_bytes:
-                    if rag_search_type == "dot product":
-                        results, search_method = webapp.Semantic_Rag_DotProduct_Search(
-                            webapp.save_path_pdf_Embeddings,
-                            webapp.save_path_Weblinks_Embeddings,
-                            topic,
-                            similarity_method="dot product"
-                        )
-                    elif rag_search_type == "cosine":
-                        results, search_method = webapp.Semantic_Rag_DotProduct_Search(
-                            webapp.save_path_pdf_Embeddings,
-                            webapp.save_path_Weblinks_Embeddings,
-                            topic,
-                            similarity_method="cosine"
-                        )
-                    elif rag_search_type == "euclidean":
-                        results, search_method = webapp.Semantic_Rag_Euclidean_Search(
-                            webapp.save_path_pdf_Embeddings,
-                            webapp.save_path_Weblinks_Embeddings,
-                            topic
-                        )
-                    elif rag_search_type == "faiss":
-                        results, search_method = webapp.Semantic_Rag_FAISS_Search(
-                            webapp.save_path_pdf_Embeddings,
-                            webapp.save_path_Weblinks_Embeddings,
-                            topic
-                        )
-                    elif rag_search_type == "hybrid":
-                        chunks_pdf, _ = webapp.load_pdf_embeddings(webapp.save_path_pdf_Embeddings)
-                        chunks_web, _ = webapp.load_pdf_embeddings(webapp.save_path_Weblinks_Embeddings)
-                        results, search_method = webapp.Hybrid_BM25_Embedding_Search(
-                            chunks_pdf, chunks_web, topic
-                        )
-                    elif rag_search_type == "cross_encoder":
-                        chunks_pdf, _ = webapp.load_pdf_embeddings(webapp.save_path_pdf_Embeddings)
-                        chunks_web, _ = webapp.load_pdf_embeddings(webapp.save_path_Weblinks_Embeddings)
-                        results, search_method = webapp.CrossEncoder_Reranking_Search(
-                            chunks_pdf, chunks_web, topic
-                        )
-
-            if "pdf" in search_mode and hasattr(webapp, "pages_and_text_list_pdf"):
-                with st.expander("View Extracted PDF Pages", expanded=False):
-                    for i, page in enumerate(webapp.pages_and_text_list_pdf):
-                        if isinstance(page, dict):
-                            st.markdown(f"### Page {page.get('page_number', i) + 1}")
-                            st.text(page.get("text", ""))
-
-            if results and isinstance(results, dict):
-                st.success(f"Search completed using {search_method}.")
-                for label, result_list in [
-                    (" Top 5 Results from PDF", results.get("pdf_results", [])),
-                    (" Top 5 Results from Web", results.get("web_results", [])),
-                    (" Top 5 Results from Combined", results.get("combined_results", [])),
-                ]:
-                    st.markdown(f"### {label}")
-                    if not result_list:
-                        st.info("No results found.")
-                        continue
-
-                    for i, res in enumerate(result_list):
-                        if not isinstance(res, dict):
-                            st.warning(f" Skipped invalid result: {res}")
-                            continue
-
-                        score = f"{res.get('score', 0):.4f}" if isinstance(res.get('score'), (int, float)) else "N/A"
-                        st.markdown(f"**Result {i + 1}**")
-                        st.markdown(f"**Score:** `{score}`")
-
-                        source_text = res.get("source", "")
-                        if "WebLink:" in source_text and "http" in source_text:
-                            parts = source_text.split("WebLink:")
-                            before_link = parts[0].strip(" +")
-                            url = parts[1].strip()
-                            st.markdown(f"**Source:** {before_link} + [WebLink]({url})  \n`{url}`")
-                        elif "http" in source_text:
-                            url = source_text.strip()
-                            st.markdown(f"**Source Link:** [{url}]({url})  \n`{url}`")
-                        else:
-                            st.markdown(f"**Source:** {source_text}")
-
-                        if verbose:
-                            st.markdown("**Full Metadata:**")
-                            st.json(res.get("metadata", {}))
-                            st.markdown("**Full Chunk Text:**")
-                            st.text(res.get("text", ""))
-                        else:
-                            snippet = res.get("text", "")[:1024]
-                            st.markdown("**Text Snippet:**")
-                            st.markdown(f"> {snippet}{'...' if len(snippet) >= 500 else ''}")
-                        st.markdown("---")
-
-    except Exception as e:
-        st.error(f"Error during execution: {e}")
-        st.exception(e)
-
-    st.markdown("---")
-    if st.button("Exit App"):
-        shutdown_streamlit()
-
-if __name__ == "__main__":
-    run_streamlit_app()
+# def shutdown_streamlit():
+#     st.warning("Shutting down the Streamlit app...")
+#     os._exit(0)
+#
+# def run_streamlit_app():
+#     file_name = ""
+#     st.set_page_config(page_title="Hybrid RAG Search", layout="wide")
+#     st.title("[Google + PDF] Semantic RAG with Google Gemma")
+#
+#     topic = st.text_input("Enter your query:")
+#     verbose = st.toggle("Verbose Answer", value=False)
+#     number_results = st.slider("Number of URLs to search", 3, 20, 5)
+#     uploaded_file = st.file_uploader("Upload PDF for knowledge base", type="pdf")
+#     use_full_pdf = st.checkbox("Use entire PDF (skip Chapter 1 detection)", value=False)
+#
+#     if uploaded_file is not None:
+#         file_name = uploaded_file.name
+#
+#     search_mode = st.selectbox(
+#         "Choose Search Mode",
+#         ["google", "pdf only", "pdf + google search", "llm", "llm + pdf", "llm + google search", "llm + google search + pdf"]
+#     )
+#
+#     rag_search_type = st.selectbox(
+#         "Choose RAG Search Method",
+#         ["dot product", "cosine", "euclidean", "faiss", "hybrid", "cross_encoder"]
+#     )
+#
+#     requires_pdf = "pdf" in search_mode
+#     disable_run = requires_pdf and not uploaded_file
+#     run_button = st.button("Run Query", disabled=disable_run)
+#
+#     try:
+#         if run_button and (topic or uploaded_file):
+#             pdf_bytes = uploaded_file.read() if (uploaded_file and requires_pdf) else None
+#
+#             webapp = WEB_PDF_RAG_Application(
+#                 topic=topic or "N/A",
+#                 number_results=number_results,
+#                 mode=search_mode,
+#                 pdf_bytes=pdf_bytes,
+#                 verbose=verbose,
+#                 rag_search_type=rag_search_type,
+#                 file_name=file_name
+#             )
+#
+#             with st.spinner("Running pipeline..."):
+#                 results, search_method = None, None
+#
+#                 if "pdf + google search" in search_mode and pdf_bytes:
+#                     if rag_search_type == "dot product":
+#                         results, search_method = webapp.Semantic_Rag_DotProduct_Search(
+#                             webapp.save_path_pdf_Embeddings,
+#                             webapp.save_path_Weblinks_Embeddings,
+#                             topic,
+#                             similarity_method="dot product"
+#                         )
+#                     elif rag_search_type == "cosine":
+#                         results, search_method = webapp.Semantic_Rag_DotProduct_Search(
+#                             webapp.save_path_pdf_Embeddings,
+#                             webapp.save_path_Weblinks_Embeddings,
+#                             topic,
+#                             similarity_method="cosine"
+#                         )
+#                     elif rag_search_type == "euclidean":
+#                         results, search_method = webapp.Semantic_Rag_Euclidean_Search(
+#                             webapp.save_path_pdf_Embeddings,
+#                             webapp.save_path_Weblinks_Embeddings,
+#                             topic
+#                         )
+#                     elif rag_search_type == "faiss":
+#                         results, search_method = webapp.Semantic_Rag_FAISS_Search(
+#                             webapp.save_path_pdf_Embeddings,
+#                             webapp.save_path_Weblinks_Embeddings,
+#                             topic
+#                         )
+#                     elif rag_search_type == "hybrid":
+#                         chunks_pdf, _ = webapp.load_pdf_embeddings(webapp.save_path_pdf_Embeddings)
+#                         chunks_web, _ = webapp.load_pdf_embeddings(webapp.save_path_Weblinks_Embeddings)
+#                         results, search_method = webapp.Hybrid_BM25_Embedding_Search(
+#                             chunks_pdf, chunks_web, topic
+#                         )
+#                     elif rag_search_type == "cross_encoder":
+#                         chunks_pdf, _ = webapp.load_pdf_embeddings(webapp.save_path_pdf_Embeddings)
+#                         chunks_web, _ = webapp.load_pdf_embeddings(webapp.save_path_Weblinks_Embeddings)
+#                         results, search_method = webapp.CrossEncoder_Reranking_Search(
+#                             chunks_pdf, chunks_web, topic
+#                         )
+#
+#             if "pdf" in search_mode and hasattr(webapp, "pages_and_text_list_pdf"):
+#                 with st.expander("View Extracted PDF Pages", expanded=False):
+#                     for i, page in enumerate(webapp.pages_and_text_list_pdf):
+#                         if isinstance(page, dict):
+#                             st.markdown(f"### Page {page.get('page_number', i) + 1}")
+#                             st.text(page.get("text", ""))
+#
+#             if results and isinstance(results, dict):
+#                 st.success(f"Search completed using {search_method}.")
+#                 for label, result_list in [
+#                     (" Top 5 Results from PDF", results.get("pdf_results", [])),
+#                     (" Top 5 Results from Web", results.get("web_results", [])),
+#                     (" Top 5 Results from Combined", results.get("combined_results", [])),
+#                 ]:
+#                     st.markdown(f"### {label}")
+#                     if not result_list:
+#                         st.info("No results found.")
+#                         continue
+#
+#                     for i, res in enumerate(result_list):
+#                         if not isinstance(res, dict):
+#                             st.warning(f" Skipped invalid result: {res}")
+#                             continue
+#
+#                         score = f"{res.get('score', 0):.4f}" if isinstance(res.get('score'), (int, float)) else "N/A"
+#                         st.markdown(f"**Result {i + 1}**")
+#                         st.markdown(f"**Score:** `{score}`")
+#
+#                         source_text = res.get("source", "")
+#                         if "WebLink:" in source_text and "http" in source_text:
+#                             parts = source_text.split("WebLink:")
+#                             before_link = parts[0].strip(" +")
+#                             url = parts[1].strip()
+#                             st.markdown(f"**Source:** {before_link} + [WebLink]({url})  \n`{url}`")
+#                         elif "http" in source_text:
+#                             url = source_text.strip()
+#                             st.markdown(f"**Source Link:** [{url}]({url})  \n`{url}`")
+#                         else:
+#                             st.markdown(f"**Source:** {source_text}")
+#
+#                         if verbose:
+#                             st.markdown("**Full Metadata:**")
+#                             st.json(res.get("metadata", {}))
+#                             st.markdown("**Full Chunk Text:**")
+#                             st.text(res.get("text", ""))
+#                         else:
+#                             snippet = res.get("text", "")[:1024]
+#                             st.markdown("**Text Snippet:**")
+#                             st.markdown(f"> {snippet}{'...' if len(snippet) >= 500 else ''}")
+#                         st.markdown("---")
+#
+#     except Exception as e:
+#         st.error(f"Error during execution: {e}")
+#         st.exception(e)
+#
+#     st.markdown("---")
+#     if st.button("Exit App"):
+#         shutdown_streamlit()
+#
+# if __name__ == "__main__":
+#     run_streamlit_app()
 

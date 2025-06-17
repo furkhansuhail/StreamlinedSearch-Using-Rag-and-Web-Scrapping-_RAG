@@ -1,9 +1,9 @@
 from ImportsForModel import *  # Assumes fitz, re, nltk, spacy, pandas, tqdm, streamlit, etc.
 
-class RAG_Application:
+class WEB_RAG_Application:
     def __init__(self, topic, number_results, mode, pdf_bytes=None, verbose=False):
         os.makedirs("EmbeddingStorage", exist_ok=True)
-        self.save_path_Weblinks = "EmbeddingStorage/EmbeddedData.pkl"
+        self.save_path_Weblinks = "EmbeddingStorage/WebLinks_EmbeddedData.pkl"
         self.device = device
         self.topic = topic
         self.number_results = number_results
@@ -17,39 +17,9 @@ class RAG_Application:
         self.embeddings = None
         self.embedding_model = SentenceTransformer("all-mpnet-base-v2", device=self.device)
 
-        # Web Link and PDF Pipeline Setup
-        # self.runPipeline()
-
-
-
-    def runPipeline(self):
-        if self.mode in ["google"]:
-            print("🔗 Running Web Pipeline...")
-            self.run_web_pipeline()
-
-        if self.mode in ["pdf only"]:
-            print("📄 Running PDF Pipeline...")
-            self.run_pdf_pipeline()
-
-        if self.mode in ["pdf + google search",]:
-            print("📄 Running PDF Pipeline...")
-            self.run_pdf_google_pipeline()
-
-        if self.mode in ["llm"]:
-            self.run_llm_pipeline()
-
-        if self.mode in ["llm + pdf"]:
-            pass
-
-        if self.mode in ["llm + google search"]:
-            self.run_llm_google_pipeline()
-
-        if self.mode in ["llm + google search + pdf"]:
-            self.run_llm_google_pdf_pipeline()
-
-
-
+    # Web Link and PDF Pipeline Setup
     def run_web_pipeline(self):
+        print("🔗 Running Web Pipeline...")
         #----------------------------------------- Weblink PipeLine ----------------------------------------------------
 
         #________________Getting URL___________________________
@@ -60,7 +30,6 @@ class RAG_Application:
         # The object self.scraped_documents is updated with the scraped and clean pages as result
         self.scrape_and_clean_pages()
         # print(self.scraped_documents)
-
 
         # Pick a random document to check for results
         random_doc = random.choice(self.scraped_documents)
@@ -76,9 +45,7 @@ class RAG_Application:
         # The object self.pages_and_chunks_WebLinks is updated with the ChunkingLinkData
         self.ChunkingLinksData()
         # Pick random key value pair to check the results of chunking Picking a random dictionary
-        random_item = random.choice(self.pages_and_chunks_WebLinks)
-
-
+        # random_item = random.choice(self.pages_and_chunks_WebLinks)
         # # Print all key-value pairs from a random selected sample
         # for key, value in random_item.items():
         #     if key == "metadata" and isinstance(value, dict):
@@ -91,37 +58,28 @@ class RAG_Application:
         # ________________Embedding Chunks of Web Pages___________________________
         self.embed_chunks()
 
-
-        # ----------------------------------------------------------------------------------------------------------
-    def run_pdf_pipeline(self):
-        # PDF Setup
-        self.first_chapter_page = self.find_first_chapter_page_auto_skip()
-        self.pages_and_text_list = self.read_pdf_pages()
-        print(f"📍 First chapter starts at page: {self.first_chapter_page}")
-
-
-    def run_pdf_google_pipeline(self):
-        pass
-
-
-    def run_llm_pipeline(self):
-        pass
-
-
-    def run_llm_google_pipeline(self):
-        pass
-
-    def run_llm_google_pdf_pipeline(self):
-        pass
-
-
     def print_wrapped(self, text, wrap_length=80):
         wrapped_text = textwrap.fill(text, wrap_length)
         print(wrapped_text)
 
-    def Semantic_Rag_DotProduct_Search(self, query, rag_search_type):
-        with open(self.save_path_Weblinks, "rb") as f:
-            data = pickle.load(f)
+    def Semantic_RAG_Search(self, query, rag_search_type):
+        """
+        Unified interface to run any RAG search method dynamically.
+        """
+        data = None
+
+        # Attempt to load the embeddings from the .pkl file
+        try:
+            with open(self.save_path_Weblinks, "rb") as f:
+                data = pickle.load(f)
+        except FileNotFoundError:
+            print(f"⚠️ Warning: File '{self.save_path_Weblinks}' not found. Skipping semantic search.")
+            return [], "No Results - Embedding file missing"
+
+        # Validate loaded data
+        if not data or "chunks" not in data or "embeddings" not in data:
+            print("❌ Invalid or incomplete data in the pickle file.")
+            return [], "No Results - Incomplete Embedding Data"
 
         chunks = data["chunks"]
         embeddings = data["embeddings"]
@@ -133,46 +91,32 @@ class RAG_Application:
         self.embeddings = torch.tensor(np.array(text_chunks_and_embedding_df["embedding"].tolist()),
                                        dtype=torch.float32).to(self.device)
 
-        print("Loaded embedded data:")
+        print("✅ Loaded embedded data:")
         print(self.embeddings.shape)
         print(text_chunks_and_embedding_df.head())
 
-        if rag_search_type == "dot product":
-            results = self.SearchQueryFromPickle_DOTPRODUCT(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Dot Product Search"
+        # 🔍 Dynamic search method map
+        search_methods = {
+            "dot product": (self.SearchQueryFromPickle_DOTPRODUCT, "Dot Product Search"),
+            "cosine": (self.SearchQueryFromPickle_COSINE, "Cosine Similarity Search"),
+            "euclidean": (self.SearchQueryFromPickle_EUCLIDEAN, "Euclidean Distance Search"),
+            "faiss": (self.SearchQueryFromPickle_FAISS, "FAISS (IVF, HNSW, Flat) Search"),
+            "hybrid": (self.SearchQueryFromPickle_HYBRID, "Hybrid Search (BM25 + Embeddings)"),
+            "hybrid_bm25_embeddings": (self.SearchQueryFromPickle_HYBRID, "Hybrid Search (BM25 + Embeddings)"),
+            "ann": (self.SearchQueryFromPickle_ANN, "Approximate Nearest Neighbors Search"),
+            "cross_encoder": (self.SearchQueryWithCrossEncoder_Reranking, "Cross-Encoder Reranking")
+        }
 
-        elif rag_search_type == "cosine":
-            results = self.SearchQueryFromPickle_COSINE(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Cosine Similarity Search"
+        # Normalize input for matching
+        rag_search_type_clean = rag_search_type.strip().lower()
 
-        elif rag_search_type == "euclidean":
-            results = self.SearchQueryFromPickle_EUCLIDEAN(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Euclidean Distance Search"
+        search_fn, search_method = search_methods.get(
+            rag_search_type_clean,
+            (self.SearchQueryFromPickle_DOTPRODUCT, "Dot Product Search (Default)")
+        )
 
-        elif rag_search_type == "faiss":
-            results = self.SearchQueryFromPickle_FAISS(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "FAISS (IVF, HNSW, Flat) Search"
-
-        elif rag_search_type == "hybrid":
-            results = self.SearchQueryFromPickle_HYBRID(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Hybrid Search (BM25 + Embeddings)"
-
-        elif rag_search_type == "ann":
-            results = self.SearchQueryFromPickle_ANN(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "(Approximate Nearest Neighbors) Search"
-
-        elif rag_search_type == "cross_encoder":
-            results = self.SearchQueryWithCrossEncoder_Reranking(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Cross-Encoder Reranking"
-
-        else:
-            results = self.SearchQueryFromPickle_DOTPRODUCT(query, self.pages_and_chunks_WebLinks, self.embeddings)
-            search_method = "Dot Product Search (Default)"
-
-
-
+        results = search_fn(query, self.pages_and_chunks_WebLinks, self.embeddings)
         return results, search_method
-
 
     def embed_chunks(self, ):
 
@@ -518,7 +462,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via Dot Product:\n")
-            print("***************************************************************************************************")
 
             for score, idx in zip(top_results[0], top_results[1]):
                 result = {
@@ -620,7 +563,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via FAISS:\n")
-            print("***************************************************************************************************")
 
             for i in range(top_k):
                 idx = indices[0][i]
@@ -679,7 +621,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via HYBRID BM25 + Embeddings:\n")
-            print("***************************************************************************************************")
 
             for idx in top_indices:
                 result = {
@@ -729,7 +670,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via Euclidean Distance:\n")
-            print("***************************************************************************************************")
 
             for idx in top_indices:
                 result = {
@@ -785,7 +725,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via ANN (FAISS - L2):\n")
-            print("***************************************************************************************************")
 
             for idx, dist in zip(indices[0], distances[0]):
                 result = {
@@ -844,7 +783,6 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via Cross-Encoder Reranking:\n")
-            print("***************************************************************************************************")
 
             for item, score in reranked:
                 result = {
@@ -858,81 +796,3 @@ class RAG_Application:
             print(f"❌ Error during Cross-Encoder reranking: {e}")
 
         return results
-
-
-# Streamlit App Logic
-def run_streamlit_app():
-    st.set_page_config(page_title="Hybrid RAG Search", layout="wide")
-    st.title("[Google + PDF] Semantic RAG with Google Gemma")
-
-    topic = st.text_input("Enter your query:")
-    verbose = st.toggle("Verbose Answer", value=False)
-    number_results = st.slider("Number of URLs to search", 3, 15, 5)
-    uploaded_file = st.file_uploader("Upload PDF for knowledge base", type="pdf")
-
-
-
-    search_mode = st.selectbox(
-        "Choose Search Mode",
-        ["google", "pdf only", "pdf + google search", "llm", "llm_pdf"]
-    )
-
-    rag_search_type = st.selectbox(
-        "Choose RAG Search Method",
-        ["dot product", "cosine", "euclidean", "faiss", "hybrid", "ann", "cross_encoder"]
-    )
-
-    requires_pdf = search_mode in ["pdf only", "pdf + google search", "llm_pdf"]
-    disable_run = requires_pdf and not uploaded_file
-
-    run_button = st.button(" Run Query", disabled=disable_run)
-
-    try:
-        if run_button and topic:
-            pdf_bytes = uploaded_file.read() if uploaded_file else None
-
-            webapp = RAG_Application(topic=topic, number_results=number_results, mode=search_mode, pdf_bytes=pdf_bytes,
-                                     verbose=verbose)
-
-            with st.spinner("Running pipeline..."):
-                webapp.runPipeline()
-
-            with st.spinner("Running semantic search..."):
-                results, search_method = webapp.Semantic_Rag_DotProduct_Search(topic, rag_search_type)
-
-            # webapp.pages_and_chunks_WebLinks = []
-            # webapp.embeddings = None
-            #
-            # results, search_method = webapp.Semantic_Rag_DotProduct_Search(topic, rag_search_type)
-
-            st.success(f" Search completed using {search_method}.")
-            st.markdown(f"### Top Retrieved Chunks ({search_method})")
-
-            st.success(f"✅ Search completed using {search_method}.")
-            st.markdown(f"### 🔍 Top Retrieved Chunks ({search_method})")
-
-            for i, res in enumerate(results):
-                score = f"{res['score']:.4f}" if isinstance(res['score'], (int, float)) else "N/A"
-
-                st.markdown(f"**Result {i + 1}**")
-                st.markdown(f"🔢 **Score:** `{score}`")
-                st.markdown(f"🌐 **Source:** {res.get('source', 'Unknown')}")
-
-                if verbose:
-                    st.markdown("🧾 **Full Metadata:**")
-                    st.json(res.get("metadata", {}))  # Assumes each chunk may have 'metadata'
-                    st.markdown("📝 **Full Chunk Text:**")
-                    st.text(res["text"])
-                else:
-                    st.markdown("📝 **Text Snippet:**")
-                    st.markdown(f"> {res['text'][:500]}{'...' if len(res['text']) > 500 else ''}")
-
-                st.markdown("---")
-
-    except Exception as e:
-        st.error(f" Error during execution: {e}")
-        st.exception(e)
-
-if __name__ == "__main__":
-    run_streamlit_app()
-
