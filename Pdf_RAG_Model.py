@@ -1,9 +1,10 @@
 from ImportsForModel import *  # Assumes fitz, re, nltk, spacy, pandas, tqdm, streamlit, etc.
 
-class RAG_Application:
-    def __init__(self, topic, number_results, mode, pdf_bytes=None, verbose=False):
+
+class RAG_PDF_Application:
+    def __init__(self, topic, number_results, mode, pdf_bytes=None, verbose=False, filename=None):
         os.makedirs("EmbeddingStorage", exist_ok=True)
-        self.save_path_Weblinks = "EmbeddingStorage/EmbeddedData.pkl"
+        self.save_path_pdfData = "EmbeddingStorage/PDF_EmbeddedData.pkl"
         self.device = device
         self.topic = topic
         self.number_results = number_results
@@ -15,58 +16,11 @@ class RAG_Application:
         self.first_chapter_page = 0
         self.verbose = verbose
         self.embeddings = None
+        self.file_name = None
         self.embedding_model = SentenceTransformer("all-mpnet-base-v2", device=self.device)
 
         # Web Link and PDF Pipeline Setup
-        # self.runPipeline()
-
-
-
-    def runPipeline(self):
-        if self.mode in ["google"]:
-            print("🔗 Running Web Pipeline...")
-            self.run_web_pipeline()
-
-        if self.mode in ["pdf only"]:
-            print("📄 Running PDF Pipeline...")
-            self.run_pdf_pipeline()
-
-        if self.mode in ["pdf + google search",]:
-            print("📄 Running PDF Pipeline...")
-            self.run_pdf_google_pipeline()
-
-        if self.mode in ["llm"]:
-            self.run_llm_pipeline()
-
-        if self.mode in ["llm + pdf"]:
-            pass
-
-        if self.mode in ["llm + google search"]:
-            self.run_llm_google_pipeline()
-
-        if self.mode in ["llm + google search + pdf"]:
-            self.run_llm_google_pdf_pipeline()
-
-    def run_pdf_google_pipeline(self):
-        pass
-
-
-    def run_llm_pipeline(self):
-        pass
-
-
-    def run_llm_google_pipeline(self):
-        pass
-
-    def run_llm_google_pdf_pipeline(self):
-        pass
-
-    # ----------------------------------------- PDF Search PipeLine ----------------------------------------------------
-    def run_pdf_pipeline(self):
-        # PDF Setup
-        self.first_chapter_page = self.find_first_chapter_page_auto_skip()
-        self.pages_and_text_list = self.read_pdf_pages()
-        print(f"📍 First chapter starts at page: {self.first_chapter_page}")
+        # self.run_pdf_pipeline()
 
     def is_likely_toc_page(self, text):
         toc_keywords = ["contents", "table of contents", "index"]
@@ -74,9 +28,9 @@ class RAG_Application:
         dot_leaders = re.findall(r"\.{5,}", text)
 
         return (
-            any(kw in text.lower() for kw in toc_keywords)
-            or len(page_numbers) > 15
-            or len(dot_leaders) >= 5
+                any(kw in text.lower() for kw in toc_keywords)
+                or len(page_numbers) > 15
+                or len(dot_leaders) >= 5
         )
 
     def find_first_chapter_page_auto_skip(self):
@@ -138,60 +92,291 @@ class RAG_Application:
                 key=f"page_text_{page['page_number']}"
             )
 
-    # ----------------------------------------- Weblink Search PipeLine ----------------------------------------------------
-    def run_web_pipeline(self):
+    def run_pdf_pipeline(self):
+        # PDF Setup
+        self.first_chapter_page = self.find_first_chapter_page_auto_skip()
+        self.pages_and_text_list_pdf = self.read_pdf_pages()
+        print(f"📍 First chapter starts at page: {self.first_chapter_page}")
+
+        # Sentencizing the Data
+        avg_sent_pdf, self.pages_and_text_list_pdf = self.Sentencizing_NLP(
+            self.pages_and_text_list_pdf, self.file_name)
+
+        # Chunking
+        _, self.pages_and_chunks_pdf = self.Chunking_NLP(
+            self.pages_and_text_list_pdf, avg_sent_pdf, source_type="pdf")
+
+        # Splitting Chunks
+        # Splitting each chunk into its own item
+        self.pages_and_chunks_pdf = self.Split_Chunks(
+            self.pages_and_text_list_pdf, source_type="pdf", min_token_length=30
+        )
+        print(self.pages_and_text_list_pdf)
+
+        random_item = random.choice(self.pages_and_text_list_pdf)
+        for key, value in random_item.items():
+            if key == "metadata" and isinstance(value, dict):
+                print("\n📁 metadata:")
+                for meta_key, meta_value in value.items():
+                    print(f"  {meta_key}: {meta_value}")
+            else:
+                print(f"\n🔑 {key}:\n{value}")
+
+        # Run once then comment it out so that we get embeddings saved to a csv file
+        # For PDF
+        self.embed_chunks_universal(
+            save_path=self.save_path_pdfData,
+            pages_and_chunks=self.pages_and_chunks_pdf,
+            source_type="pdf"
+        )
 
 
-        #________________Getting URL___________________________
-        self.url_list = self.get_google_results(self.topic, self.number_results)
-        print(self.url_list)
+    def Sentencizing_NLP(self, pages_and_text_list, filename=None, target_sentences=10):
+        nlp = English()
+        nlp.add_pipe("sentencizer")
 
-        #________________Scrapping Webpages from URL___________________________
-        # The object self.scraped_documents is updated with the scraped and clean pages as result
-        self.scrape_and_clean_pages()
-        # print(self.scraped_documents)
+        cleaned_pages = []
+        seen_hashes = set()
 
+        for item in tqdm(pages_and_text_list, desc=f"🧠 Sentencizing {filename or 'Data'}"):
+            text = item.get("text", "").strip()
+            if not text or len(text.split()) < 5:
+                continue
 
-        # Pick a random document to check for results
-        random_doc = random.choice(self.scraped_documents)
+            text_hash = hash(text)
+            if text_hash in seen_hashes:
+                continue
+            seen_hashes.add(text_hash)
 
-        # Print sample Sample and total documents in the results
-        # print(f"🔢 Total documents: {len(self.scraped_documents)}")
-        # print("📄 Title:", random_doc.metadata.get("title", "No Title"))
-        # print("📝 Content Sample:\n", random_doc.page_content[:300], "...")
-        # df = pd.DataFrame(self.scraped_documents)
-        # print(df.head())
+            sentences = [str(sent).strip() for sent in nlp(text).sents if len(str(sent).strip()) > 0]
 
-        # ________________Chunking Web Links Data___________________________
-        # The object self.pages_and_chunks_WebLinks is updated with the ChunkingLinkData
-        self.ChunkingLinksData()
-        # Pick random key value pair to check the results of chunking Picking a random dictionary
-        random_item = random.choice(self.pages_and_chunks_WebLinks)
+            for i in range(0, len(sentences), target_sentences):
+                chunk = sentences[i:i + target_sentences]
+                if len(chunk) < 3:
+                    continue
 
+                chunk_text = " ".join(chunk)
 
-        # # Print all key-value pairs from a random selected sample
-        # for key, value in random_item.items():
-        #     if key == "metadata" and isinstance(value, dict):
-        #         print("\n📁 metadata:")
-        #         for meta_key, meta_value in value.items():
-        #             print(f"  {meta_key}: {meta_value}")
-        #     else:
-        #         print(f"\n🔑 {key}:\n{value}")
+                chunk_data = {
+                    "sentence_chunk": chunk_text,
+                    "sentences": chunk,
+                    "chunk_sentence_count": len(chunk),
+                    "chunk_char_count": len(chunk_text),
+                    "chunk_word_count": len(chunk_text.split()),
+                    "chunk_token_count": len(chunk_text) / 4
+                }
 
-        # ________________Embedding Chunks of Web Pages___________________________
-        self.embed_chunks()
+                metadata = {k: v for k, v in item.items() if k not in ["text", "sentences"]}
+                chunk_data.update(metadata)
+                cleaned_pages.append(chunk_data)
 
+        mean_sent_count = int(pd.DataFrame(cleaned_pages)["chunk_sentence_count"].mean()) if cleaned_pages else 0
+        return mean_sent_count, cleaned_pages
 
-        # ----------------------------------------------------------------------------------------------------------
+    def Chunking_NLP(self, pages_and_text_list, average_sentences=10, overlap_sentences=3, source_type="web"):
+        chunk_size = average_sentences
+        stride = chunk_size - overlap_sentences
 
+        pages_with_chunks = []
+        all_chunks = []
 
+        def split_with_overlap(sentences, chunk_size, stride):
+            return [sentences[i:i + chunk_size] for i in range(0, len(sentences), stride) if
+                    len(sentences[i:i + chunk_size]) >= 3]
+
+        def split_without_overlap(sentences, chunk_size):
+            return [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size) if
+                    len(sentences[i:i + chunk_size]) >= 3]
+
+        for item in tqdm(pages_and_text_list, desc=f"🔗 Chunking ({source_type})"):
+            sentences = item.get("sentences", [])
+            chunks = split_with_overlap(sentences, chunk_size,
+                                        stride) if source_type == "pdf" else split_without_overlap(sentences,
+                                                                                                   chunk_size)
+
+            item["sentence_chunks"] = chunks
+            item["num_chunks"] = len(chunks)
+            pages_with_chunks.append(item)
+
+            for chunk in chunks:
+                joined = " ".join(chunk).strip()
+                joined = re.sub(r'\.([A-Z])', r'. \1', joined)
+                joined = re.sub(r'\s+', ' ', joined)
+                joined = re.sub(r'[“”]', '"', joined)
+                joined = re.sub(r"[’‘]", "'", joined)
+                joined = re.sub(r"\s*–\s*", " - ", joined)
+
+                token_count = len(joined) / 4
+                if token_count < 30:
+                    continue
+
+                chunk_dict = {
+                    "sentence_chunk": joined,
+                    "chunk_char_count": len(joined),
+                    "chunk_word_count": len(joined.split()),
+                    "chunk_token_count": token_count,
+                }
+
+                for key in ["page_number", "source", "title"]:
+                    if key in item:
+                        chunk_dict[key] = item[key]
+
+                all_chunks.append(chunk_dict)
+
+        print(f"✅ Total Chunks: {len(all_chunks)}")
+        return pages_with_chunks, all_chunks
+
+    def Split_Chunks(self, pages_and_text_list, source_type="web", min_token_length=10):
+        """
+        Splits sentence chunks into flat records, suitable for embedding.
+        Applies consistent cleaning and metadata preservation for both Web and PDF sources.
+
+        Args:
+            pages_and_text_list: List of pages with 'sentence_chunks' field.
+            source_type: "web" or "pdf" to handle optional metadata fields like 'source' or 'text_path'.
+            min_token_length: Minimum chunk size in estimated tokens to retain the chunk.
+
+        Returns:
+            filtered_chunks: List of clean chunk dictionaries that meet the token length threshold.
+        """
+        all_chunks = []
+
+        for item in tqdm(pages_and_text_list, desc=f"📚 Splitting Chunks ({source_type})"):
+            for sentence_chunk in item.get("sentence_chunks", []):
+                chunk_dict = {}
+
+                # Metadata retention (commonly shared)
+                chunk_dict["page_number"] = item.get("page_number")
+
+                if source_type == "web":
+                    chunk_dict["source"] = item.get("source")
+                    chunk_dict["title"] = item.get("title")
+                    chunk_dict["text_path"] = item.get("text_path")
+
+                if source_type == "pdf":
+                    chunk_dict["source"] = item.get("source")
+                    chunk_dict["title"] = item.get("title")
+                    chunk_dict["text_path"] = "PDF"  # item.get("text_path")
+
+                # Join sentences into one block of text
+                joined = "".join(sentence_chunk).replace("  ", " ").strip()
+                joined = re.sub(r'\.([A-Z])', r'. \1', joined)
+                joined = re.sub(r'\s+', ' ', joined)
+                joined = re.sub(r'[“”]', '"', joined)
+                joined = re.sub(r"[’‘]", "'", joined)
+                joined = re.sub(r"\s*–\s*", " - ", joined)
+
+                token_count = len(joined) / 4  # Rough estimation
+
+                chunk_dict["sentence_chunk"] = joined
+                chunk_dict["chunk_char_count"] = len(joined)
+                chunk_dict["chunk_word_count"] = len(joined.split())
+                chunk_dict["chunk_token_count"] = token_count
+
+                all_chunks.append(chunk_dict)
+
+        # Convert to DataFrame for filtering and analysis
+        stats_df = pd.DataFrame(all_chunks)
+
+        # Debug: Print short chunk samples
+        if not stats_df.empty and (stats_df["chunk_token_count"] <= min_token_length).any():
+            short_samples = stats_df[stats_df["chunk_token_count"] <= min_token_length].sample(
+                min(5, (stats_df["chunk_token_count"] <= min_token_length).sum())
+            )
+            for _, row in short_samples.iterrows():
+                print(f"⚠️ Short Chunk ({row['chunk_token_count']:.1f} tokens): {row['sentence_chunk'][:100]}...")
+
+        # Filter out short chunks
+        filtered_chunks = stats_df[stats_df["chunk_token_count"] > min_token_length].to_dict(orient="records")
+
+        print(f"✅ Total Valid Chunks: {len(filtered_chunks)}")
+        return filtered_chunks
+
+    def embed_chunks_universal(self, save_path, pages_and_chunks, source_type="pdf"):
+        """
+        Universal embedding function for both WebLink and PDF chunks.
+
+        Args:
+            save_path (str): Path to store the embeddings .pkl file
+            pages_and_chunks (list): List of chunk dictionaries with 'sentence_chunk' key
+            source_type (str): Either "pdf" or "web", used for hash handling and verbosity
+
+        Returns:
+            None
+        """
+        import hashlib
+
+        def hash_chunk_text(text):
+            return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+        # Load existing data if present
+        if os.path.exists(save_path):
+            with open(save_path, "rb") as f:
+                existing_data = pickle.load(f)
+            print(f"✅ Loaded existing embeddings from: {save_path}")
+
+            if isinstance(existing_data.get("embeddings"), np.ndarray):
+                existing_data["embeddings"] = existing_data["embeddings"].tolist()
+        else:
+            existing_data = {"chunks": [], "embeddings": []}
+
+        # Hash-based deduplication
+        existing_hashes = {
+            hash_chunk_text(chunk["sentence_chunk"]) for chunk in existing_data["chunks"]
+        }
+
+        current_chunk_map = {
+            hash_chunk_text(chunk["sentence_chunk"]): chunk for chunk in pages_and_chunks
+        }
+
+        new_hashes = set(current_chunk_map.keys()) - existing_hashes
+        new_chunks = [current_chunk_map[h] for h in new_hashes]
+
+        print(f"🆕 New {source_type} chunks to embed: {len(new_chunks)}")
+
+        if not new_chunks:
+            print("⚠️ No new chunks found.")
+            return
+
+        # Generate embeddings
+        embedding_model.to(self.device)
+        new_texts = [chunk["sentence_chunk"] for chunk in new_chunks]
+
+        new_embeddings_tensor = self.embedding_model.encode(
+            new_texts,
+            show_progress_bar=True,
+            convert_to_tensor=True
+        ).to(self.device)
+
+        # Combine with existing
+        if existing_data["embeddings"]:
+            existing_embeddings_tensor = torch.tensor(
+                existing_data["embeddings"], dtype=torch.float32
+            ).to(self.device)
+        else:
+            existing_embeddings_tensor = torch.empty(0, new_embeddings_tensor.shape[1]).to(self.device)
+
+        combined_embeddings = torch.cat([existing_embeddings_tensor, new_embeddings_tensor], dim=0)
+        combined_chunks = existing_data["chunks"] + new_chunks
+
+        # Save updated data
+        with open(save_path, "wb") as f:
+            pickle.dump({
+                "embeddings": combined_embeddings.cpu().numpy(),
+                "chunks": combined_chunks
+            }, f)
+
+        print(f"💾 Embeddings updated and saved to {save_path}")
+        print(f"📊 Previous: {len(existing_data['chunks'])} | Added: {len(new_chunks)} | Total: {len(combined_chunks)}")
+
+    #******************************************************************************************************************
 
     def print_wrapped(self, text, wrap_length=80):
         wrapped_text = textwrap.fill(text, wrap_length)
-        print(wrapped_text)
+        # print(wrapped_text)
 
     def Semantic_Rag_DotProduct_Search(self, query, rag_search_type):
-        with open(self.save_path_Weblinks, "rb") as f:
+        with open(self.save_path_pdfData, "rb") as f:
             data = pickle.load(f)
 
         chunks = data["chunks"]
@@ -205,9 +390,8 @@ class RAG_Application:
                                        dtype=torch.float32).to(self.device)
 
         print("Loaded embedded data:")
-        print(self.embeddings.shape)
-        print(text_chunks_and_embedding_df.head())
-
+        # print(self.embeddings.shape)
+        # print(text_chunks_and_embedding_df.head())
         if rag_search_type == "dot product":
             results = self.SearchQueryFromPickle_DOTPRODUCT(query, self.pages_and_chunks_WebLinks, self.embeddings)
             search_method = "Dot Product Search"
@@ -224,7 +408,7 @@ class RAG_Application:
             results = self.SearchQueryFromPickle_FAISS(query, self.pages_and_chunks_WebLinks, self.embeddings)
             search_method = "FAISS (IVF, HNSW, Flat) Search"
 
-        elif rag_search_type == "hybrid":
+        elif rag_search_type == "hybrid_BM25_Embeddings":
             results = self.SearchQueryFromPickle_HYBRID(query, self.pages_and_chunks_WebLinks, self.embeddings)
             search_method = "Hybrid Search (BM25 + Embeddings)"
 
@@ -240,248 +424,13 @@ class RAG_Application:
             results = self.SearchQueryFromPickle_DOTPRODUCT(query, self.pages_and_chunks_WebLinks, self.embeddings)
             search_method = "Dot Product Search (Default)"
 
-
+        for item in results:
+            item["source"] = f"Page Number {item.get('page_number', 'Unknown')}"
 
         return results, search_method
 
 
-    def embed_chunks(self, ):
-
-        def hash_chunk_text(text):
-            return hashlib.md5(text.encode("utf-8")).hexdigest()
-
-        if not self.pages_and_chunks_WebLinks:
-            print("⚠️ No chunks available to embed.")
-            return
-
-        current_chunk_map = {
-            hash_chunk_text(chunk["sentence_chunk"]): chunk for chunk in self.pages_and_chunks_WebLinks
-        }
-
-        if os.path.exists(self.save_path_Weblinks):
-            print(f"📂 Loading existing embeddings from {self.save_path_Weblinks}")
-            with open(self.save_path_Weblinks, "rb") as f:
-                data = pickle.load(f)
-                existing_embeddings = torch.tensor(data["embeddings"], device=self.device)
-                existing_chunks = data["chunks"]
-                existing_hashes = {hash_chunk_text(chunk["sentence_chunk"]) for chunk in existing_chunks}
-
-            new_hashes = set(current_chunk_map.keys()) - existing_hashes
-            new_chunks = [current_chunk_map[h] for h in new_hashes]
-
-            if not new_chunks:
-                print("✅ All chunks already embedded. No new chunks to add.")
-                print(f"📊 Total existing chunks: {len(existing_chunks)}")
-                return
-
-            print(f"➕ New chunks found: {len(new_chunks)}")
-            texts_to_embed = [chunk["sentence_chunk"] for chunk in new_chunks]
-            new_embeddings = self.embedding_model.encode(
-                texts_to_embed, show_progress_bar=True, convert_to_tensor=True
-            )
-
-            combined_embeddings = torch.cat([
-                existing_embeddings,
-                new_embeddings.to(self.device)
-            ], dim=0)
-            combined_chunks = existing_chunks + new_chunks
-
-            with open(self.save_path_Weblinks, "wb") as f:
-                pickle.dump({
-                    "embeddings": combined_embeddings.cpu().numpy(),
-                    "chunks": combined_chunks
-                }, f)
-
-            print("✅ Updated embeddings saved.")
-            print(f"📊 Previous: {len(existing_chunks)} | Added: {len(new_chunks)} | Total: {len(combined_chunks)}")
-
-        else:
-            print("📁 No existing embeddings found. Creating new embedding file...")
-            texts = [chunk["sentence_chunk"] for chunk in self.pages_and_chunks_WebLinks]
-            self.embeddings = self.embedding_model.encode(
-                texts, show_progress_bar=True, convert_to_tensor=True
-            )
-
-            with open(self.save_path_Weblinks, "wb") as f:
-                pickle.dump({
-                    "embeddings": self.embeddings.cpu().numpy(),
-                    "chunks": self.pages_and_chunks_WebLinks
-                }, f)
-
-            print("✅ Embeddings generated and saved.")
-            print(f"📊 Total new chunks embedded: {len(self.pages_and_chunks_WebLinks)}")
-
-    def ChunkingLinksData(self):
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1280,  # 320 tokens × 4 characters per token
-            chunk_overlap=100,
-            separators=["\n\n", "\n", ".", " ", ""]
-        )
-
-
-        for doc in tqdm(self.scraped_documents):
-            splits = text_splitter.split_text(doc.page_content)
-            for i, split in enumerate(splits):
-                self.pages_and_chunks_WebLinks.append({
-                    "sentence_chunk": split.strip(),
-                    "chunk_index": i,
-                    "chunk_word_count": len(split.split()),
-                    "chunk_char_count": len(split),
-                    "chunk_token_count": len(split) / 4,
-                    "metadata": doc.metadata,
-                    "source": doc.metadata.get("source", "N/A")
-                })
-
-        print(f"✅ Total chunks generated: {len(self.pages_and_chunks_WebLinks)}")
-        print(self.pages_and_chunks_WebLinks)
-
-
-    def get_google_results(self, query: str, num_results: int) -> list[str]:
-        urls = []
-        try:
-            raw_results = search(query, num_results=num_results * 2)
-            for result in raw_results:
-                if "youtube.com" in result or "youtu.be" in result:
-                    continue
-                urls.append(result)
-                if len(urls) >= num_results:
-                    break
-        except Exception as e:
-            print(f"❌ Google Search failed: {e}")
-        return urls
-
-
-    def scrape_and_clean_pages(self):
-        cache_dir = Path("cache")
-        cache_dir.mkdir(exist_ok=True)
-        text_dir = Path("scraped_texts")
-        text_dir.mkdir(exist_ok=True)
-
-        seen_texts = set()
-
-        # Initialize sentencizer
-        nlp = English()
-        nlp.add_pipe("sentencizer")
-
-        def clean_text(text: str) -> str:
-            text = re.sub(r'\s+', ' ', text)
-            text = text.encode('ascii', errors='ignore').decode()
-            text = re.sub(r'\.([A-Z])', r'. \1', text)
-            boilerplate_keywords = [
-                'cookie policy', 'terms of service', 'privacy policy',
-                'enable javascript', 'ad blocker', 'copyright',
-                'all rights reserved'
-            ]
-            for phrase in boilerplate_keywords:
-                text = re.sub(rf'\b{re.escape(phrase)}\b', '', text, flags=re.IGNORECASE)
-            lines = text.split('. ')
-            if len(lines) > 10:
-                most_common = max(set(lines), key=lines.count)
-                if lines.count(most_common) > 3:
-                    text = '. '.join([line for line in lines if line != most_common])
-            return text.strip()
-
-        def clean_html_with_readability_and_html_removal(html_content):
-            doc = ReadabilityDocument(html_content)
-            title = doc.short_title()
-            summary_html = doc.summary()
-            soup = BeautifulSoup(summary_html, 'html.parser')
-            for tag in soup(
-                    ['script', 'style', 'nav', 'footer', 'header', 'aside', 'form', 'button', 'table', 'ul', 'ol',
-                     'dl']):
-                tag.decompose()
-            text = soup.get_text(separator=' ', strip=True)
-            cleaned_text = re.sub(r'\s+', ' ', html.unescape(text)).strip()
-            return cleaned_text, title
-
-        def fetch_and_cache(url):
-            url_hash = hashlib.md5(url.encode()).hexdigest()
-            cache_path = cache_dir / f"{url_hash}.json"
-            text_path = text_dir / f"{url_hash}.txt"
-
-            if cache_path.exists():
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    return Document(page_content=data["text"], metadata={
-                        "source": data["url"],
-                        "title": data.get("title", ""),
-                        "text_path": data.get("text_path", "")
-                    })
-
-            try:
-                response = requests.get(url, timeout=10)
-                raw_text, title = clean_html_with_readability_and_html_removal(response.text)
-
-                if not raw_text or len(raw_text) < 100:
-                    print(f"⚠️ Skipping low-content page: {url}")
-                    return None
-                if any(bad_phrase in raw_text.lower() for bad_phrase in [
-                    "please enable js", "ad blocker", "enable javascript", "bot detection"
-                ]):
-                    print(f"⚠️ Skipping bot-protected or misleading page: {url}")
-                    return None
-
-                final_text = clean_text(raw_text)
-
-                try:
-                    if detect(final_text) != "en":
-                        print(f"🌐 Skipping non-English page: {url}")
-                        return None
-                except Exception as lang_err:
-                    print(f"⚠️ Language detection failed: {lang_err}")
-                    return None
-
-                hash_digest = hashlib.md5(final_text.encode()).hexdigest()
-                if hash_digest in seen_texts:
-                    print(f"⚠️ Skipping duplicate content: {url}")
-                    return None
-                seen_texts.add(hash_digest)
-
-                with open(text_path, "w", encoding="utf-8") as f:
-                    f.write(final_text)
-
-                # 🧠 Sentence splitting here
-                doc_nlp = nlp(final_text)
-                sentences = [str(sent).strip() for sent in doc_nlp.sents if sent.text.strip()]
-                sentence_count = len(sentences)
-
-                data = {
-                    "url": url,
-                    "title": title,
-                    "text": final_text,
-                    "text_path": str(text_path)
-                }
-
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f)
-
-                return Document(
-                    page_content=final_text,
-                    metadata={
-                        "source": url,
-                        "title": title,
-                        "text_path": str(text_path),
-                        "sentences": sentences,
-                        "sentence_count": sentence_count
-                    })
-
-            except Exception as e:
-                print(f"❌ Failed to scrape {url}: {e}")
-                return None
-
-        documents = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(fetch_and_cache, url): url for url in self.url_list}
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    documents.append(result)
-
-        self.scraped_documents = documents
-        return documents
-
-
-
+    #---------------------------------------------------------------------------------------------------------------
 
     # Search Functions Different Methods
     def SearchQueryFromPickle_DOTPRODUCT(self, query, pages_and_chunks=None, embeddings_tensor=None, top_k=5):
@@ -521,13 +470,15 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via Dot Product:\n")
-            print("***************************************************************************************************")
+            print(
+                "***************************************************************************************************")
 
             for score, idx in zip(top_results[0], top_results[1]):
                 result = {
                     "score": float(score),
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -577,7 +528,8 @@ class RAG_Application:
                 result = {
                     "score": float(score),
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -623,14 +575,16 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via FAISS:\n")
-            print("***************************************************************************************************")
+            print(
+                "***************************************************************************************************")
 
             for i in range(top_k):
                 idx = indices[0][i]
                 result = {
                     "score": float(scores[0][i]),
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -639,7 +593,8 @@ class RAG_Application:
 
         return results
 
-    def SearchQueryFromPickle_HYBRID(self, query, pages_and_chunks=None, embeddings_tensor=None, top_k=5, alpha=0.5):
+    def SearchQueryFromPickle_HYBRID(self, query, pages_and_chunks=None, embeddings_tensor=None, top_k=5,
+                                     alpha=0.5):
         """
         Hybrid Search using BM25 lexical score + embedding similarity (cosine).
         alpha = weight for embedding score (0 to 1), 1 means pure embedding.
@@ -682,13 +637,15 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via HYBRID BM25 + Embeddings:\n")
-            print("***************************************************************************************************")
+            print(
+                "***************************************************************************************************")
 
             for idx in top_indices:
                 result = {
                     "score": float(final_scores[idx]),
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -732,13 +689,15 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via Euclidean Distance:\n")
-            print("***************************************************************************************************")
+            print(
+                "***************************************************************************************************")
 
             for idx in top_indices:
                 result = {
                     "score": float(distances[idx]),  # smaller = better
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -788,13 +747,15 @@ class RAG_Application:
 
             print(f"\n📌 Query: {query}")
             print("🔍 Top results via ANN (FAISS - L2):\n")
-            print("***************************************************************************************************")
+            print(
+                "***************************************************************************************************")
 
             for idx, dist in zip(indices[0], distances[0]):
                 result = {
                     "score": float(dist),  # smaller = better
                     "text": pages_and_chunks[idx]["sentence_chunk"],
-                    "source": pages_and_chunks[idx].get("source", "N/A")
+                    "source": pages_and_chunks[idx].get("source", "N/A"),
+                    "page_number": pages_and_chunks[idx].get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -802,6 +763,7 @@ class RAG_Application:
             print(f"❌ Error during ANN search: {e}")
 
         return results
+
 
     def SearchQueryWithCrossEncoder_Reranking(self, query, pages_and_chunks=None, embeddings_tensor=None, top_k=5):
         """
@@ -828,10 +790,11 @@ class RAG_Application:
                     self.device)
 
             # Step 2: Retrieve top N candidates using fast base method
-            base_top_k = 15  # Get more than final top_k for reranking
+            base_top_k = 15  # Retrieve more than top_k to rerank
             if hasattr(self, 'SearchQueryFromPickle_DOTPRODUCT'):
-                base_results = self.SearchQueryFromPickle_DOTPRODUCT(query, pages_and_chunks, embeddings_tensor,
-                                                                     top_k=base_top_k)
+                base_results = self.SearchQueryFromPickle_DOTPRODUCT(
+                    query, pages_and_chunks, embeddings_tensor, top_k=base_top_k
+                )
             else:
                 raise Exception("No base search method (e.g., DOTPRODUCT) defined.")
 
@@ -853,7 +816,8 @@ class RAG_Application:
                 result = {
                     "score": float(score),
                     "text": item["text"],
-                    "source": item.get("source", "N/A")
+                    "source": item.get("source", "N/A"),
+                    "page_number": item.get("page_number", "N/A")
                 }
                 results.append(result)
 
@@ -863,79 +827,5 @@ class RAG_Application:
         return results
 
 
-# Streamlit App Logic
-def run_streamlit_app():
-    st.set_page_config(page_title="Hybrid RAG Search", layout="wide")
-    st.title("[Google + PDF] Semantic RAG with Google Gemma")
 
-    topic = st.text_input("Enter your query:")
-    verbose = st.toggle("Verbose Answer", value=False)
-    number_results = st.slider("Number of URLs to search", 3, 15, 5)
-    uploaded_file = st.file_uploader("Upload PDF for knowledge base", type="pdf")
-
-
-
-    search_mode = st.selectbox(
-        "Choose Search Mode",
-        ["google", "pdf only", "pdf + google search", "llm", "llm_pdf"]
-    )
-
-    rag_search_type = st.selectbox(
-        "Choose RAG Search Method",
-        ["dot product", "cosine", "euclidean", "faiss", "hybrid", "ann", "cross_encoder"]
-    )
-
-    requires_pdf = search_mode in ["pdf only", "pdf + google search", "llm_pdf"]
-    disable_run = requires_pdf and not uploaded_file
-
-    run_button = st.button(" Run Query", disabled=disable_run)
-
-    try:
-        if run_button and topic:
-            pdf_bytes = uploaded_file.read() if uploaded_file else None
-
-            webapp = RAG_Application(topic=topic, number_results=number_results, mode=search_mode, pdf_bytes=pdf_bytes,
-                                     verbose=verbose)
-
-            with st.spinner("Running pipeline..."):
-                webapp.runPipeline()
-
-            with st.spinner("Running semantic search..."):
-                results, search_method = webapp.Semantic_Rag_DotProduct_Search(topic, rag_search_type)
-
-            # webapp.pages_and_chunks_WebLinks = []
-            # webapp.embeddings = None
-            #
-            # results, search_method = webapp.Semantic_Rag_DotProduct_Search(topic, rag_search_type)
-
-            st.success(f" Search completed using {search_method}.")
-            st.markdown(f"### Top Retrieved Chunks ({search_method})")
-
-            st.success(f"✅ Search completed using {search_method}.")
-            st.markdown(f"### 🔍 Top Retrieved Chunks ({search_method})")
-
-            for i, res in enumerate(results):
-                score = f"{res['score']:.4f}" if isinstance(res['score'], (int, float)) else "N/A"
-
-                st.markdown(f"**Result {i + 1}**")
-                st.markdown(f"🔢 **Score:** `{score}`")
-                st.markdown(f"🌐 **Source:** {res.get('source', 'Unknown')}")
-
-                if verbose:
-                    st.markdown("🧾 **Full Metadata:**")
-                    st.json(res.get("metadata", {}))  # Assumes each chunk may have 'metadata'
-                    st.markdown("📝 **Full Chunk Text:**")
-                    st.text(res["text"])
-                else:
-                    st.markdown("📝 **Text Snippet:**")
-                    st.markdown(f"> {res['text'][:500]}{'...' if len(res['text']) > 500 else ''}")
-
-                st.markdown("---")
-
-    except Exception as e:
-        st.error(f" Error during execution: {e}")
-        st.exception(e)
-
-if __name__ == "__main__":
-    run_streamlit_app()
 
